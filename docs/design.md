@@ -25,6 +25,8 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    recovery works when the client lands on a different instance. Pub/sub keeps
    nothing, so recovery only works on the same instance. If wrong: recovery
    silently degrades to a full rejoin after failover; layer two below catches it.
+   This is the decision that scales: one publish, every instance reads. With
+   ten thousand viewers and no chat, it is the one decision that matters more.
 4. Server-assigned per-room sequence from Redis `INCR`. Rejected: server
    timestamps (not unique, clocks differ across instances) and client-side ids
    (clients cannot order each other). `INCR` is atomic across instances.
