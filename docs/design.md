@@ -2,8 +2,7 @@
 
 Chat rooms over Socket.IO. Clients join rooms, see who is present, send messages
 that get a server-assigned sequence number, and survive disconnects and instance
-crashes without losing messages. Built 2026-09 as a practice project; every
-decision below is one I expect to defend.
+crashes without losing messages. Built 2026-09 as a practice project;
 
 ## Decisions
 
