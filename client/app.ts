@@ -313,7 +313,11 @@ function attemptSend(entry: OutboxEntry): void {
         sendError.textContent = "";
         return;
       }
-      sendFailure(entry, ack.error);
+      entry.notSent = true;
+      sendError.textContent = ack.error;
+      if (currentRoom === entry.room) {
+        renderMessages(entry.room);
+      }
     },
   );
 }
@@ -444,7 +448,7 @@ messageForm.addEventListener("submit", (event) => {
   }
   const room = currentRoom;
   const text = messageInput.value.trim();
-  if (room === null || text.length === 0) {
+  if (room === null || text.length === 0 || text.length > 2000) {
     return;
   }
 
