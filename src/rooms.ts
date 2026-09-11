@@ -109,15 +109,16 @@ export class RoomStore {
 
   async clear(): Promise<void> {
     const matchingKeys: string[] = [];
-    for await (const key of this.redis.scanIterator({
+    for await (const yieldedKeys of this.redis.scanIterator({
       MATCH: `${this.prefix}:*`,
       COUNT: 100,
     })) {
-      matchingKeys.push(String(key));
+      const keys = Array.isArray(yieldedKeys) ? yieldedKeys : [yieldedKeys];
+      matchingKeys.push(...keys.map((key) => String(key)));
     }
 
-    if (matchingKeys.length > 0) {
-      await this.redis.del(matchingKeys);
+    for (let index = 0; index < matchingKeys.length; index += 100) {
+      await this.redis.del(matchingKeys.slice(index, index + 100));
     }
   }
 }

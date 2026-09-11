@@ -83,4 +83,51 @@ describe("idempotent message append", () => {
       }),
     ).resolves.toEqual({ ok: false, error: expect.any(String) });
   });
+
+  it("clears every key under the store prefix", async () => {
+    const prefix = uniquePrefix();
+    const running = await server({ prefix });
+    redis = await connectRedis(process.env.REDIS_URL ?? "redis://localhost:6379");
+    const alice = client(running.port, "alice");
+    const bob = client(running.port, "bob");
+    const room = "lobby";
+
+    await Promise.all([
+      once(alice, "server:hello"),
+      once(bob, "server:hello"),
+    ]);
+    await expect(join(alice, room)).resolves.toMatchObject({ ok: true });
+    await expect(join(bob, room)).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      send(alice, {
+        room,
+        text: "hello",
+        clientId: "client-alice",
+      }),
+    ).resolves.toEqual({ ok: true, seq: 1 });
+    await expect(
+      send(bob, {
+        room,
+        text: "hi",
+        clientId: "client-bob",
+      }),
+    ).resolves.toEqual({ ok: true, seq: 2 });
+
+    const roomKeys = keys(prefix).room(room);
+    const expectedKeys = [
+      roomKeys.seq,
+      roomKeys.stream,
+      roomKeys.members,
+      keys(prefix).clientId(room, "client-alice"),
+      keys(prefix).clientId(room, "client-bob"),
+    ];
+    await expect(redis.keys(`${prefix}:*`)).resolves.toEqual(
+      expect.arrayContaining(expectedKeys),
+    );
+
+    await running.store.clear();
+
+    await expect(redis.keys(`${prefix}:*`)).resolves.toEqual([]);
+  });
 });
