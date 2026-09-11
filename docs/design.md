@@ -50,7 +50,14 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    `SET NX EX 300`. Rejected: get-then-set from Node (two clients or a retry
    can interleave between the get and the set and produce two sequence
    numbers for one message). Client emits with a five-second acknowledgement
-   timeout and retries up to three times with the same `clientId`. If wrong:
+   timeout and retries up to three times with the same `clientId`. The timer
+   and the retries run only while the socket is connected; while disconnected
+   the message waits in the client's outbox and is sent once after reconnect,
+   because Socket.IO would otherwise queue every retry and flush them all.
+   After the third failure the message stays in the list marked "not sent"
+   with a retry control that reuses the same `clientId`. A message that never
+   reached the server is handled by the same path: the retry is its first
+   arrival, and the script stores it once. If wrong:
    a lost acknowledgement becomes a duplicate message.
 8. Presence in a Redis hash per room plus an instance heartbeat key with a
    ten-second TTL. Members whose instance key expired are dropped on read and
