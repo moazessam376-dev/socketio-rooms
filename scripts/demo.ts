@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createConnection } from "node:net";
 import { io, type Socket } from "socket.io-client";
 import type {
   ClientToServerEvents,
@@ -11,7 +12,6 @@ import type {
 
 type DemoSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-const tsx = process.platform === "win32" ? "tsx.cmd" : "tsx";
 const prefix = `demo:${randomUUID()}`;
 const children = new Set<ChildProcess>();
 const clients = new Set<DemoSocket>();
@@ -23,7 +23,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 function startInstance(port: number, instanceId: string): Promise<ChildProcess> {
-  const child = spawn(tsx, ["src/main.ts"], {
+  const child = spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
     env: {
       ...process.env,
       PORT: String(port),
@@ -108,6 +108,43 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void> {
       resolve();
     });
   });
+}
+
+async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const refused = await new Promise<boolean>((resolve, reject) => {
+      const connection = createConnection({ host: "localhost", port });
+      let settled = false;
+      const settle = (result: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        connection.destroy();
+        result();
+      };
+
+      connection.once("connect", () => settle(() => resolve(false)));
+      connection.once("timeout", () => settle(() => resolve(false)));
+      connection.once("error", (error) => {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ECONNREFUSED") {
+          settle(() => resolve(true));
+          return;
+        }
+        settle(() => reject(error));
+      });
+      connection.setTimeout(100);
+    });
+
+    if (refused) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`port ${port} did not become free within ${timeoutMs}ms`);
 }
 
 async function stopChildren(): Promise<void> {
@@ -302,6 +339,7 @@ async function runDemo(): Promise<void> {
   const killedAt = Date.now();
   first.kill("SIGKILL");
   await waitForExit(first, 5_000);
+  await waitForPortFree(3001, 5_000);
 
   const replacement = await startInstance(3001, "a2");
   assert(!clientOne.connected, "client 1 reconnected before the failover message");

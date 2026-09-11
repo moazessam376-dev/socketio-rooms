@@ -6,6 +6,7 @@ import type {
   SendAck,
   ServerToClientEvents,
 } from "../src/events.js";
+import { connectRedis, keys } from "../src/redis.js";
 import {
   cleanup,
   client,
@@ -98,7 +99,9 @@ describe("room replay", () => {
     await expect(join(bob, room)).resolves.toMatchObject({ ok: true });
 
     await reconnect(bob);
-    for (let index = 1; index <= 5; index += 1) {
+    // MAXLEN ~ trims whole radix-tree nodes (100 entries each), so 250 sends
+    // guarantee that the oldest entries are gone even with approximate trimming.
+    for (let index = 1; index <= 250; index += 1) {
       await expect(
         send(alice, {
           room,
@@ -112,7 +115,62 @@ describe("room replay", () => {
 
     expect(ack).toMatchObject({ ok: true, gap: true });
     if (ack.ok) {
-      expect(ack.missed.map((message) => message.seq)).toEqual([3, 4, 5]);
+      const seqs = ack.missed.map((message) => message.seq);
+      expect(seqs.length).toBeGreaterThan(0);
+      expect(seqs[0]).toBeGreaterThan(1);
+      expect(seqs[seqs.length - 1]).toBe(250);
+      expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    }
+  });
+
+  it("replays based on the entries retained by approximate trimming", async () => {
+    const prefix = uniquePrefix();
+    const running = await server({ prefix, bufferSize: 3 });
+    const alice = client(running.port, "alice");
+    const bob = client(running.port, "bob");
+    const room = "lobby";
+
+    await Promise.all([
+      once(alice, "server:hello"),
+      once(bob, "server:hello"),
+    ]);
+    await expect(join(alice, room)).resolves.toMatchObject({ ok: true });
+    await expect(join(bob, room)).resolves.toMatchObject({ ok: true });
+
+    for (let index = 1; index <= 7; index += 1) {
+      await expect(
+        send(alice, {
+          room,
+          text: `message-${index}`,
+          clientId: `alice-${index}`,
+        }),
+      ).resolves.toEqual({ ok: true, seq: index });
+    }
+
+    const redis = await connectRedis(process.env.REDIS_URL ?? "redis://localhost:6379");
+    try {
+      const streamLength = await redis.xLen(keys(prefix).room(room).stream);
+
+      await reconnect(bob);
+      const ack = await join(bob, room, 3);
+
+      expect(ack).toMatchObject({ ok: true });
+      if (ack.ok) {
+        if (streamLength > 3) {
+          expect(ack).toMatchObject({ gap: false });
+          expect(ack.missed.map((message) => message.seq)).toEqual([4, 5, 6, 7]);
+        } else {
+          expect(ack).toMatchObject({ gap: true });
+          expect(ack.missed.map((message) => message.seq)).toEqual(
+            Array.from(
+              { length: streamLength },
+              (_value, index) => 7 - streamLength + index + 1,
+            ),
+          );
+        }
+      }
+    } finally {
+      await redis.quit();
     }
   });
 });

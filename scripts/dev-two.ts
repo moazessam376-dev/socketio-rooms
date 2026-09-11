@@ -1,12 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
-const tsx = process.platform === "win32" ? "tsx.cmd" : "tsx";
 const children: ChildProcess[] = [
-  spawn(tsx, ["src/main.ts"], {
+  spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
     env: { ...process.env, PORT: "3001", INSTANCE_ID: "a", ADAPTER: "1" },
     stdio: "inherit",
   }),
-  spawn(tsx, ["src/main.ts"], {
+  spawn(process.execPath, ["--import", "tsx", "src/main.ts"], {
     env: { ...process.env, PORT: "3002", INSTANCE_ID: "b", ADAPTER: "1" },
     stdio: "inherit",
   }),

@@ -166,7 +166,9 @@ export class RoomStore {
   async after(room: string, lastSeq: number): Promise<{ missed: Message[]; gap: boolean }> {
     const roomKeys = keys(this.prefix).room(room);
     const [entries, counter] = await Promise.all([
-      this.redis.xRevRange(roomKeys.stream, "+", "-", { COUNT: this.bufferSize }),
+      this.redis.xRevRange(roomKeys.stream, "+", "-", {
+        COUNT: this.bufferSize * 2,
+      }),
       this.redis.get(roomKeys.seq),
     ]);
 

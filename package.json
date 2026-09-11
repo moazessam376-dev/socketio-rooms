@@ -14,7 +14,7 @@
     "start": "node dist/main.js",
     "build": "tsc -p .",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.client.json"
   },
   "keywords": [],
   "author": "",
