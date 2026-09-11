@@ -38,6 +38,33 @@ redis.call('SET', KEYS[1], message, 'NX', 'EX', ARGV[6])
 return message
 `;
 
+function streamField(message: unknown, field: string): string {
+  if (message instanceof Map) {
+    const value = message.get(field);
+    if (value !== undefined) {
+      return String(value);
+    }
+  } else if (typeof message === "object" && message !== null) {
+    const value = Reflect.get(message, field);
+    if (value !== undefined) {
+      return String(value);
+    }
+  }
+
+  throw new Error(`stream message is missing ${field}`);
+}
+
+function messageFromStream(room: string, entry: { message: unknown }): Message {
+  return {
+    room,
+    seq: Number(streamField(entry.message, "seq")),
+    from: streamField(entry.message, "from"),
+    text: streamField(entry.message, "text"),
+    clientId: streamField(entry.message, "clientId"),
+    ts: Number(streamField(entry.message, "ts")),
+  };
+}
+
 export class RoomStore {
   private readonly redis: Redis;
   private readonly prefix: string;
@@ -103,8 +130,25 @@ export class RoomStore {
     return JSON.parse(result) as Message;
   }
 
-  async after(_room: string, _lastSeq: number): Promise<{ missed: Message[]; gap: boolean }> {
-    throw new Error("not implemented");
+  async after(room: string, lastSeq: number): Promise<{ missed: Message[]; gap: boolean }> {
+    const roomKeys = keys(this.prefix).room(room);
+    const [entries, counter] = await Promise.all([
+      this.redis.xRevRange(roomKeys.stream, "+", "-", { COUNT: this.bufferSize }),
+      this.redis.get(roomKeys.seq),
+    ]);
+
+    if (entries.length === 0) {
+      const currentSeq = Number(counter ?? 0);
+      return { missed: [], gap: currentSeq > lastSeq };
+    }
+
+    const messages = entries
+      .map((entry) => messageFromStream(room, entry))
+      .reverse();
+    return {
+      missed: messages.filter((message) => message.seq > lastSeq),
+      gap: messages[0].seq > lastSeq + 1,
+    };
   }
 
   async clear(): Promise<void> {

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import { Server } from "socket.io";
 import type { Socket } from "socket.io";
 import {
@@ -20,9 +21,13 @@ export type ServerOptions = {
   prefix?: string;
   instanceId: string;
   port?: number;
-  recovery?: { maxDisconnectionDuration: number } | false;
+  recovery?: {
+    maxDisconnectionDuration?: number;
+    skipMiddlewares?: boolean;
+  } | false;
   adapter?: boolean;
   serveStatic?: boolean;
+  bufferSize?: number;
 };
 
 export type RunningServer = {
@@ -54,14 +59,75 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const store = new RoomStore(redis, {
     prefix: opts.prefix ?? "socketio-rooms",
     instanceId: opts.instanceId,
+    bufferSize: opts.bufferSize,
   });
-  const httpServer = createServer();
+  const httpServer = createServer((request, response) => {
+    if (opts.serveStatic !== true) {
+      response.statusCode = 404;
+      response.end();
+      return;
+    }
+
+    const pathname = (request.url ?? "/").split("?", 1)[0];
+    const file =
+      pathname === "/"
+        ? {
+            path: new URL("../public/index.html", import.meta.url),
+            contentType: "text/html; charset=utf-8",
+          }
+        : pathname === "/app.js"
+          ? {
+              path: new URL("../public/app.js", import.meta.url),
+              contentType: "application/javascript; charset=utf-8",
+            }
+          : undefined;
+
+    if (file === undefined) {
+      response.statusCode = 404;
+      response.end();
+      return;
+    }
+
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.statusCode = 405;
+      response.setHeader("Allow", "GET, HEAD");
+      response.end();
+      return;
+    }
+
+    void readFile(file.path)
+      .then((contents) => {
+        response.statusCode = 200;
+        response.setHeader("Content-Type", file.contentType);
+        if (request.method === "HEAD") {
+          response.end();
+          return;
+        }
+        response.end(contents);
+      })
+      .catch(() => {
+        response.statusCode = 404;
+        response.end("Not found");
+      });
+  });
+  const connectionStateRecovery =
+    opts.recovery === false
+      ? undefined
+      : {
+          maxDisconnectionDuration:
+            opts.recovery?.maxDisconnectionDuration ?? 120_000,
+          skipMiddlewares: opts.recovery?.skipMiddlewares ?? true,
+        };
   const io = new Server<
     ClientToServerEvents,
     ServerToClientEvents,
     Record<string, never>,
     SocketData
-  >(httpServer);
+  >(httpServer, {
+    ...(connectionStateRecovery === undefined
+      ? {}
+      : { connectionStateRecovery }),
+  });
 
   io.use((socket, next) => {
     const name = parseName(socket.handshake.auth);
@@ -75,8 +141,23 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   });
 
   io.on("connection", (socket: RoomSocket) => {
-    const joinedRooms = new Set<string>();
+    const joinedRooms = new Set(
+      [...socket.rooms].filter((room) => room !== socket.id),
+    );
     socket.emit("server:hello", { instanceId: opts.instanceId });
+
+    if (socket.recovered) {
+      void (async () => {
+        for (const room of joinedRooms) {
+          const members = await store.join(room, {
+            socketId: socket.id,
+            name: socket.data.name,
+            instanceId: opts.instanceId,
+          });
+          io.to(room).emit("presence", { room, members });
+        }
+      })().catch(() => undefined);
+    }
 
     socket.on("room:join", async (payload, ack) => {
       const parsed = joinSchema.safeParse(payload);
@@ -90,13 +171,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         let missed: Message[] = [];
         let gap = false;
         if (lastSeq !== undefined) {
-          try {
-            ({ missed, gap } = await store.after(room, lastSeq));
-          } catch (error) {
-            if (!(error instanceof Error && error.message === "not implemented")) {
-              throw error;
-            }
-          }
+          ({ missed, gap } = await store.after(room, lastSeq));
         }
 
         const members = await store.join(room, {

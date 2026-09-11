@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Socket.IO Rooms</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+
+      body {
+        margin: 0 auto;
+        max-width: 48rem;
+        padding: 2rem 1rem;
+      }
+
+      form {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+
+      input {
+        flex: 1;
+        min-width: 0;
+        padding: 0.5rem;
+      }
+
+      button {
+        padding: 0.5rem 0.8rem;
+      }
+
+      #status,
+      #typing-line,
+      #history-notice,
+      #send-error {
+        min-height: 1.4rem;
+      }
+
+      #history-notice,
+      #send-error {
+        color: #d66;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Socket.IO Rooms</h1>
+      <p id="status">reconnecting (attempt 0)</p>
+
+      <form id="join-form">
+        <input id="room-input" name="room" placeholder="Room name" autocomplete="off" required />
+        <button type="submit">Join</button>
+      </form>
+
+      <h2 id="room-title">No room selected</h2>
+      <h3>Members</h3>
+      <ul id="members"></ul>
+
+      <h3>Messages</h3>
+      <p id="history-notice" hidden>history truncated</p>
+      <ol id="messages"></ol>
+      <p id="typing-line" aria-live="polite"></p>
+
+      <form id="message-form">
+        <input id="message-input" name="message" placeholder="Message" autocomplete="off" required />
+        <button type="submit">Send</button>
+      </form>
+      <p id="send-error" role="alert"></p>
+    </main>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
