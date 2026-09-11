@@ -400,6 +400,8 @@ async function runDemo(): Promise<void> {
     assert(counts.get(seq) === 1, `client 1 received seq ${seq} more than once`);
   }
 
+  const messageCountA = receivedByClientOne.length;
+
   const lastSeqBeforeCrash = Math.max(
     ...receivedByClientTwo.map((message) => message.seq),
   );
@@ -461,7 +463,6 @@ async function runDemo(): Promise<void> {
   }
   const messageCountB = receivedByClientTwo.length;
 
-  const messageCountA = receivedByClientOne.length;
   console.log("scenario A: clean disconnect, then kill and replace");
   console.log("metric       value");
   console.log("scenario     A");
