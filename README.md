@@ -73,11 +73,11 @@ When `ADAPTER=1`, each server uses the Redis Streams adapter with a separate Red
 
 Sticky sessions are required for the HTTP long-polling handshake when more than one instance is behind a load balancer. WebSocket-only transport avoids that handshake requirement, but requires proxies that allow WebSocket connections.
 
-Failover means starting a new instance on the same port after the old instance stops. Clients keep their configured URL, and the replacement instance uses the shared adapter stream and session data.
+Failover means starting a new instance on the same port after the old instance stops. Clients keep their configured URL, and the replacement instance uses the shared adapter stream and session data. Which recovery layer a client takes depends on how it lost the old instance. Socket.IO persists a recovery session only when a socket disconnects cleanly, so a client that was still attached when the instance died reconnects with `socket.recovered` false and takes layer two: it re-joins with its last sequence number and receives what it missed. A client that had disconnected cleanly before the instance died recovers through layer one. `npm run demo` is a separate script that shows both paths; the test suite does not run it.
 
 ## Tests
 
-The tests cover unit-ish RoomStore behavior, integration behavior against real Redis, cluster fan-out, cross-instance recovery, ghost presence cleanup, and the process-level demo.
+The tests cover RoomStore behavior, integration behavior against real Redis, cluster fan-out, cross-instance recovery, and ghost presence cleanup. The process-level demo is a separate script, `npm run demo`.
 
 CI runs the typecheck, client build, and Vitest suite with a Redis 7 service.
 

@@ -2,7 +2,7 @@
 
 Chat rooms over Socket.IO. Clients join rooms, see who is present, send messages
 that get a server-assigned sequence number, and survive disconnects and instance
-crashes without losing messages. Built 2026-09 as a practice project;
+crashes without losing messages. Built 2026-09 as a practice project.
 
 ## Decisions
 
@@ -45,7 +45,10 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    the session store is gone) and layer two alone (loses room membership and
    makes every reconnect a full rejoin). Both layers live in the tab's memory:
    the recovery session id and offset inside the Socket.IO client, and
-   `lastSeq` per room in the page. A reload loses both and is a fresh
+   `lastSeq` per room in the page. Socket.IO persists a recovery session
+   only when a socket disconnects cleanly, so clients attached to an instance
+   that dies always take layer two; the demo shows both paths. A reload
+   loses both and is a fresh
    connection, so a join without `lastSeq` returns the most recent messages,
    up to fifty, as initial history with `gap: false`. Nothing is stored in
    localStorage, cookies or the browser cache, and there is no identity to
@@ -56,7 +59,7 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    `SET NX EX 300`. Rejected: get-then-set from Node (two clients or a retry
    can interleave between the get and the set and produce two sequence
    numbers for one message). Client emits with a five-second acknowledgement
-   timeout and retries up to three times with the same `clientId`. The timer
+   timeout and tries at most three times in total with the same `clientId`. The timer
    and the retries run only while the socket is connected; while disconnected
    the message waits in the client's outbox and is sent once after reconnect,
    because Socket.IO would otherwise queue every retry and flush them all.
@@ -71,6 +74,8 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    adapter, which is a round trip to every instance with a timeout on every
    read and cannot tell a slow instance from a dead one. If wrong: a crashed
    instance leaves ghost members for up to ten seconds, which the doc states.
+   An instance that stalls longer than the TTL while alive has its members
+   swept until they re-join, which the design accepts.
 9. Auth is a validated display name in the handshake (`auth.name`, 1 to 32
    characters, letters, digits, underscore, hyphen), checked in `io.use`.
    Rejected for this project: signed tokens. The generalisation is the same
@@ -93,7 +98,7 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
 
 Buffer 500 messages per room. Recovery window 120 s. Heartbeat TTL 10 s,
 refreshed every 3 s. `clientId` key TTL 300 s. Acknowledgement timeout 5 s,
-three retries.
+three attempts in total.
 
 ## Not in scope
 
