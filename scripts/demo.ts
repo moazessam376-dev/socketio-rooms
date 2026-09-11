@@ -212,22 +212,18 @@ function connectClient(
   const socket = io(`http://localhost:${port}`, {
     auth: { name },
     autoConnect: false,
-    ...(reconnect
-      ? {
-          reconnectionDelay: 5_000,
-          reconnectionDelayMax: 5_000,
-          randomizationFactor: 0,
-        }
-      : {}),
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 2_000,
+    randomizationFactor: 0,
   }) as DemoSocket;
   clients.add(socket);
   socket.connect();
   return socket;
 }
 
-function join(socket: DemoSocket, room: string): Promise<JoinAck> {
+function join(socket: DemoSocket, room: string, lastSeq?: number): Promise<JoinAck> {
   return new Promise((resolve) => {
-    socket.emit("room:join", { room }, resolve);
+    socket.emit("room:join", lastSeq === undefined ? { room } : { room, lastSeq }, resolve);
   });
 }
 
@@ -294,12 +290,14 @@ async function sendAndObserve(
 
 async function runDemo(): Promise<void> {
   const first = await startInstance(3001, "a");
-  await startInstance(3002, "b");
+  const second = await startInstance(3002, "b");
   const room = "demo";
   const receivedByClientOne: Message[] = [];
+  const receivedByClientTwo: Message[] = [];
   const clientOne = connectClient(3001, "alice", true);
   const clientTwo = connectClient(3002, "bob");
   clientOne.on("message", (message) => receivedByClientOne.push(message));
+  clientTwo.on("message", (message) => receivedByClientTwo.push(message));
 
   await Promise.all([
     waitForConnect(clientOne, 10_000),
@@ -355,7 +353,9 @@ async function runDemo(): Promise<void> {
   assert(failoverAck.ok && failoverAck.seq === 7, "expected bob-7 to receive seq 7");
 
   const recoveredAt = await recoveredAtPromise;
-  const failoverMs = recoveredAt - killedAt;
+  const reconnectMsA = recoveredAt - killedAt;
+  const recoveredA = clientOne.recovered;
+  assert(recoveredA, "client 1 did not recover via connection state recovery");
   await waitUntil(
     () => receivedByClientOne.some((message) => message.seq === 7),
     10_000,
@@ -400,10 +400,82 @@ async function runDemo(): Promise<void> {
     assert(counts.get(seq) === 1, `client 1 received seq ${seq} more than once`);
   }
 
-  console.log("timing");
+  const lastSeqBeforeCrash = Math.max(
+    ...receivedByClientTwo.map((message) => message.seq),
+  );
+  assert(lastSeqBeforeCrash === 9, "client 2 did not receive scenario A messages");
+
+  const disconnectedB = waitForDisconnect(clientTwo, 10_000);
+  const killedAtB = Date.now();
+  second.kill("SIGKILL");
+  await disconnectedB;
+  await waitForExit(second, 5_000);
+  await waitForPortFree(3002, 5_000);
+
+  const reconnectPromiseB = waitForConnect(clientTwo, 30_000);
+  await startInstance(3002, "b2");
+  const sendAlice = (seq: number) =>
+    sendAndObserve(clientOne, receivedByClientOne, room, `message-${seq}`, seq, `alice-${seq}`);
+  for (let seq = lastSeqBeforeCrash + 1; seq <= lastSeqBeforeCrash + 2; seq += 1) {
+    await sendAlice(seq);
+  }
+
+  await reconnectPromiseB;
+  const reconnectMsB = Date.now() - killedAtB;
+  const recoveredB = clientTwo.recovered;
+  assert(!recoveredB, "client 2 unexpectedly recovered connection state after a crash");
+
+  const rejoinAck = await withTimeout(
+    join(clientTwo, room, lastSeqBeforeCrash),
+    10_000,
+    "client 2 rejoin",
+  );
+  assert(rejoinAck.ok, "client 2 rejoin failed");
+  assert(!rejoinAck.gap, "client 2 rejoin reported a message gap");
+  assert(
+    rejoinAck.missed.length === 2 &&
+      rejoinAck.missed[0]?.seq === lastSeqBeforeCrash + 1 &&
+      rejoinAck.missed[1]?.seq === lastSeqBeforeCrash + 2,
+    "client 2 rejoin returned unexpected missed messages",
+  );
+  receivedByClientTwo.push(...rejoinAck.missed);
+
+  const sendBob = (seq: number) =>
+    sendAndObserve(clientTwo, receivedByClientTwo, room, `message-${seq}`, seq, `bob-${seq}`);
+  for (let seq = lastSeqBeforeCrash + 3; seq <= lastSeqBeforeCrash + 5; seq += 1) {
+    await sendBob(seq);
+  }
+
+  const countsB = new Map<number, number>();
+  for (const message of receivedByClientTwo) {
+    countsB.set(message.seq, (countsB.get(message.seq) ?? 0) + 1);
+  }
+  const sequencesB = [...countsB.keys()].sort((left, right) => left - right);
+  assert(
+    sequencesB.length === lastSeqBeforeCrash + 5 &&
+      sequencesB.every((seq, index) => seq === index + 1),
+    `client 2 received unexpected sequences: ${sequencesB.join(", ")}`,
+  );
+  for (let seq = 1; seq <= lastSeqBeforeCrash + 5; seq += 1) {
+    assert(countsB.get(seq) === 1, `client 2 received seq ${seq} more than once`);
+  }
+  const messageCountB = receivedByClientTwo.length;
+
+  console.log("scenario A: clean disconnect, then kill and replace");
   console.log("metric       value");
-  console.log(`failoverMs   ${failoverMs}`);
+  console.log("scenario     A");
+  console.log(`recovered    ${recoveredA}`);
+  console.log(`reconnectMs  ${reconnectMsA}`);
   console.log(`messageCount ${receivedByClientOne.length}`);
+  console.log("");
+  console.log("scenario B: crash with the client attached");
+  console.log("metric       value");
+  console.log("scenario     B");
+  console.log(`recovered    ${recoveredB}`);
+  console.log(`reconnectMs  ${reconnectMsB}`);
+  console.log(`messageCount ${messageCountB}`);
+  console.log("");
+  console.log("reconnectMs is bounded by the client's reconnectionDelay, not a measured property");
 
   void replacement;
 }
