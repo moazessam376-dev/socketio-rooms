@@ -9,6 +9,8 @@
   "scripts": {
     "build:client": "esbuild client/app.ts --bundle --format=iife --outfile=public/app.js",
     "dev": "npm run build:client && tsx src/main.ts",
+    "dev:two": "npm run build:client && tsx scripts/dev-two.ts",
+    "demo": "tsx scripts/demo.ts",
     "start": "node dist/main.js",
     "build": "tsc -p .",
     "test": "vitest run",

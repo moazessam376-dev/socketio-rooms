@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { createAdapter } from "@socket.io/redis-streams-adapter";
 import { Server } from "socket.io";
 import type { Socket } from "socket.io";
 import {
@@ -13,7 +14,7 @@ import {
   type SocketData,
 } from "./events.js";
 import { parseName } from "./auth.js";
-import { connectRedis } from "./redis.js";
+import { connectRedis, type Redis } from "./redis.js";
 import { RoomStore } from "./rooms.js";
 
 export type ServerOptions = {
@@ -28,6 +29,8 @@ export type ServerOptions = {
   adapter?: boolean;
   serveStatic?: boolean;
   bufferSize?: number;
+  heartbeatMs?: number;
+  instanceTtlSeconds?: number;
 };
 
 export type RunningServer = {
@@ -40,6 +43,7 @@ export type RunningServer = {
   store: RoomStore;
   port: number;
   instanceId: string;
+  readonly closed: boolean;
   close(): Promise<void>;
 };
 
@@ -56,11 +60,31 @@ function errorText(error: unknown, fallback: string): string {
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const redis = await connectRedis(opts.redisUrl);
+  const prefix = opts.prefix ?? "socketio-rooms";
   const store = new RoomStore(redis, {
-    prefix: opts.prefix ?? "socketio-rooms",
+    prefix,
     instanceId: opts.instanceId,
     bufferSize: opts.bufferSize,
+    instanceTtlSeconds: opts.instanceTtlSeconds,
   });
+  let adapterRedis: Redis | undefined;
+  if (opts.adapter === true) {
+    try {
+      adapterRedis = await connectRedis(opts.redisUrl);
+    } catch (error) {
+      await redis.quit();
+      throw error;
+    }
+  }
+
+  const adapter =
+    adapterRedis === undefined
+      ? undefined
+      : createAdapter(adapterRedis, {
+          streamName: `${prefix}:adapter:stream`,
+          channelPrefix: `${prefix}:adapter:channel`,
+          sessionKeyPrefix: `${prefix}:adapter:session:`,
+        });
   const httpServer = createServer((request, response) => {
     if (opts.serveStatic !== true) {
       response.statusCode = 404;
@@ -127,6 +151,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     ...(connectionStateRecovery === undefined
       ? {}
       : { connectionStateRecovery }),
+    ...(adapter === undefined ? {} : { adapter }),
   });
 
   io.use((socket, next) => {
@@ -168,10 +193,12 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
       const { room, lastSeq } = parsed.data;
       try {
-        let missed: Message[] = [];
+        let missed: Message[];
         let gap = false;
         if (lastSeq !== undefined) {
           ({ missed, gap } = await store.after(room, lastSeq));
+        } else {
+          missed = await store.recent(room, 50);
         }
 
         const members = await store.join(room, {
@@ -253,7 +280,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     });
   });
 
+  let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
   try {
+    await store.heartbeat();
+    heartbeatInterval = setInterval(() => {
+      void store.heartbeat();
+    }, opts.heartbeatMs ?? 3000);
+
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
         httpServer.off("listening", onListening);
@@ -268,13 +301,27 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       httpServer.listen(opts.port ?? 3000);
     });
   } catch (error) {
-    await redis.quit();
+    if (heartbeatInterval !== undefined) {
+      clearInterval(heartbeatInterval);
+    }
+    await Promise.allSettled([io.close()]);
+    await Promise.allSettled([
+      redis.quit(),
+      ...(adapterRedis === undefined ? [] : [adapterRedis.quit()]),
+    ]);
     throw error;
   }
 
   const address = httpServer.address();
   if (address === null || typeof address === "string") {
-    await redis.quit();
+    if (heartbeatInterval !== undefined) {
+      clearInterval(heartbeatInterval);
+    }
+    await Promise.allSettled([io.close()]);
+    await Promise.allSettled([
+      redis.quit(),
+      ...(adapterRedis === undefined ? [] : [adapterRedis.quit()]),
+    ]);
     throw new Error("server did not start listening");
   }
 
@@ -284,16 +331,28 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     store,
     port: address.port,
     instanceId: opts.instanceId,
+    get closed() {
+      return closed;
+    },
     async close() {
       if (closed) {
         return;
       }
       closed = true;
-      await io.close();
-      if (httpServer.listening) {
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      if (heartbeatInterval !== undefined) {
+        clearInterval(heartbeatInterval);
       }
-      await redis.quit();
+      try {
+        await io.close();
+        if (httpServer.listening) {
+          await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        }
+      } finally {
+        await Promise.allSettled([
+          redis.quit(),
+          ...(adapterRedis === undefined ? [] : [adapterRedis.quit()]),
+        ]);
+      }
     },
   };
 }

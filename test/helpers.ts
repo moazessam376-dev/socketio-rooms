@@ -61,7 +61,9 @@ export async function cleanup(): Promise<void> {
   clients.clear();
 
   for (const running of servers) {
-    await running.store.clear();
+    if (!running.closed) {
+      await running.store.clear();
+    }
     await running.close();
   }
   servers.clear();

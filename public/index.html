@@ -48,27 +48,34 @@
   <body>
     <main>
       <h1>Socket.IO Rooms</h1>
-      <p id="status">reconnecting (attempt 0)</p>
-
-      <form id="join-form">
-        <input id="room-input" name="room" placeholder="Room name" autocomplete="off" required />
-        <button type="submit">Join</button>
+      <form id="connect-form">
+        <input id="name-input" name="name" placeholder="Name" autocomplete="name" required />
+        <button id="connect-button" type="submit">Connect</button>
       </form>
 
-      <h2 id="room-title">No room selected</h2>
-      <h3>Members</h3>
-      <ul id="members"></ul>
+      <section id="room-app" hidden>
+        <p id="status">reconnecting (attempt 0)</p>
 
-      <h3>Messages</h3>
-      <p id="history-notice" hidden>history truncated</p>
-      <ol id="messages"></ol>
-      <p id="typing-line" aria-live="polite"></p>
+        <form id="join-form">
+          <input id="room-input" name="room" placeholder="Room name" autocomplete="off" required />
+          <button type="submit">Join</button>
+        </form>
 
-      <form id="message-form">
-        <input id="message-input" name="message" placeholder="Message" autocomplete="off" required />
-        <button type="submit">Send</button>
-      </form>
-      <p id="send-error" role="alert"></p>
+        <h2 id="room-title">No room selected</h2>
+        <h3>Members</h3>
+        <ul id="members"></ul>
+
+        <h3>Messages</h3>
+        <p id="history-notice" hidden>history truncated</p>
+        <ol id="messages"></ol>
+        <p id="typing-line" aria-live="polite"></p>
+
+        <form id="message-form">
+          <input id="message-input" name="message" placeholder="Message" autocomplete="off" required />
+          <button type="submit">Send</button>
+        </form>
+        <p id="send-error" role="alert"></p>
+      </section>
     </main>
     <script src="/socket.io/socket.io.js"></script>
     <script src="/app.js"></script>

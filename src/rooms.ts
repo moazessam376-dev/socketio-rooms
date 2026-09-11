@@ -68,14 +68,18 @@ function messageFromStream(room: string, entry: { message: unknown }): Message {
 export class RoomStore {
   private readonly redis: Redis;
   private readonly prefix: string;
+  private readonly instanceId: string;
   private readonly bufferSize: number;
   private readonly clientIdTtlSeconds: number;
+  private readonly instanceTtlSeconds: number;
 
   constructor(redis: Redis, opts: RoomStoreOptions) {
     this.redis = redis;
     this.prefix = opts.prefix;
+    this.instanceId = opts.instanceId;
     this.bufferSize = opts.bufferSize ?? 500;
     this.clientIdTtlSeconds = opts.clientIdTtlSeconds ?? 300;
+    this.instanceTtlSeconds = opts.instanceTtlSeconds ?? 10;
   }
 
   async join(room: string, member: Member): Promise<Member[]> {
@@ -85,23 +89,52 @@ export class RoomStore {
       member.socketId,
       JSON.stringify({ name: member.name, instanceId: member.instanceId }),
     );
-    return this.members(room);
+    return this.sweep(room);
   }
 
   async leave(room: string, socketId: string): Promise<Member[]> {
     const roomKeys = keys(this.prefix).room(room);
     await this.redis.hDel(roomKeys.members, socketId);
-    return this.members(room);
+    return this.sweep(room);
   }
 
   async members(room: string): Promise<Member[]> {
-    const roomKeys = keys(this.prefix).room(room);
-    const values = await this.redis.hGetAll(roomKeys.members);
-    const result = Object.entries(values).map(([socketId, value]) => {
-      const member = JSON.parse(value) as Omit<Member, "socketId">;
-      return { socketId, name: member.name, instanceId: member.instanceId };
+    const storedMembers = await this.readMembers(room);
+    const liveInstanceIds = await this.liveInstanceIds(storedMembers);
+    return sortMembers(
+      storedMembers.filter((member) => liveInstanceIds.has(member.instanceId)),
+    );
+  }
+
+  async heartbeat(): Promise<void> {
+    await this.redis.set(keys(this.prefix).instance(this.instanceId), "1", {
+      EX: this.instanceTtlSeconds,
     });
-    return result.sort((left, right) => left.socketId.localeCompare(right.socketId));
+  }
+
+  async sweep(room: string): Promise<Member[]> {
+    const roomKeys = keys(this.prefix).room(room);
+    const storedMembers = await this.readMembers(room);
+    const liveInstanceIds = await this.liveInstanceIds(storedMembers);
+    const staleSocketIds = storedMembers
+      .filter((member) => !liveInstanceIds.has(member.instanceId))
+      .map((member) => member.socketId);
+
+    if (staleSocketIds.length > 0) {
+      await this.redis.hDel(roomKeys.members, staleSocketIds);
+    }
+
+    return sortMembers(
+      storedMembers.filter((member) => liveInstanceIds.has(member.instanceId)),
+    );
+  }
+
+  async recent(room: string, limit: number): Promise<Message[]> {
+    const roomKeys = keys(this.prefix).room(room);
+    const entries = await this.redis.xRevRange(roomKeys.stream, "+", "-", {
+      COUNT: limit,
+    });
+    return entries.map((entry) => messageFromStream(room, entry)).reverse();
   }
 
   async append(
@@ -165,4 +198,30 @@ export class RoomStore {
       await this.redis.del(matchingKeys.slice(index, index + 100));
     }
   }
+
+  private async readMembers(room: string): Promise<Member[]> {
+    const roomKeys = keys(this.prefix).room(room);
+    const values = await this.redis.hGetAll(roomKeys.members);
+    return Object.entries(values).map(([socketId, value]) => {
+      const member = JSON.parse(value) as Omit<Member, "socketId">;
+      return { socketId, name: member.name, instanceId: member.instanceId };
+    });
+  }
+
+  private async liveInstanceIds(members: Member[]): Promise<Set<string>> {
+    const instanceIds = new Set(members.map((member) => member.instanceId));
+    const checks = await Promise.all(
+      [...instanceIds].map(async (instanceId) => {
+        const exists = await this.redis.exists(keys(this.prefix).instance(instanceId));
+        return exists > 0 ? instanceId : null;
+      }),
+    );
+    return new Set(
+      checks.filter((instanceId): instanceId is string => instanceId !== null),
+    );
+  }
+}
+
+function sortMembers(members: Member[]): Member[] {
+  return members.sort((left, right) => left.socketId.localeCompare(right.socketId));
 }
