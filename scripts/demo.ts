@@ -461,12 +461,13 @@ async function runDemo(): Promise<void> {
   }
   const messageCountB = receivedByClientTwo.length;
 
+  const messageCountA = receivedByClientOne.length;
   console.log("scenario A: clean disconnect, then kill and replace");
   console.log("metric       value");
   console.log("scenario     A");
   console.log(`recovered    ${recoveredA}`);
   console.log(`reconnectMs  ${reconnectMsA}`);
-  console.log(`messageCount ${receivedByClientOne.length}`);
+  console.log(`messageCount ${messageCountA}`);
   console.log("");
   console.log("scenario B: crash with the client attached");
   console.log("metric       value");
