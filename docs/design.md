@@ -43,7 +43,13 @@ Each decision: chosen / rejected / why here / what breaks if wrong.
    re-joins each room with its `lastSeq` and the server returns the missed
    messages in order. Rejected: layer one alone (fails past the window, or when
    the session store is gone) and layer two alone (loses room membership and
-   makes every reconnect a full rejoin). If wrong: duplicates or gaps; the
+   makes every reconnect a full rejoin). Both layers live in the tab's memory:
+   the recovery session id and offset inside the Socket.IO client, and
+   `lastSeq` per room in the page. A reload loses both and is a fresh
+   connection, so a join without `lastSeq` returns the most recent messages,
+   up to fifty, as initial history with `gap: false`. Nothing is stored in
+   localStorage, cookies or the browser cache, and there is no identity to
+   restore (decision 9). If wrong: duplicates or gaps; the
    client dedupes on `seq`, and the demo measures the recovery time.
 7. Idempotent send through a client-generated `clientId`. The append is one
    atomic Redis script: read the `clientId` key, else `INCR`, `XADD`, and
